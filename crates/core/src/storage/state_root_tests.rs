@@ -45,6 +45,18 @@ fn sandbox_blocked_home_falls_back_to_private_temp_state_root() {
 }
 
 #[test]
+fn existing_unsafe_primary_is_not_treated_as_a_sandbox_blocked_home() {
+    let home = TempDir::new();
+    let primary = home.path().join(STATE_DIR_NAME);
+    fs::write(&primary, b"not a directory").expect("write conflicting state root");
+
+    assert!(
+        !is_sandbox_blocked(&primary),
+        "an existing invalid state root must fail during private-file validation, not redirect"
+    );
+}
+
+#[test]
 fn explicit_env_never_falls_back_when_sandbox_blocked() {
     let dir = TempDir::new();
     let temp = TempDir::new();

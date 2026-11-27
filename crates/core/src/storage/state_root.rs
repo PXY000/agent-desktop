@@ -107,6 +107,16 @@ fn is_sandbox_blocked(primary: &Path) -> bool {
     if !parent.exists() {
         return false;
     }
+    match std::fs::symlink_metadata(primary) {
+        // An existing state root is never evidence of a read-only HOME. If it
+        // is a junction, symlink, file, or has unsafe permissions, let the
+        // private-file layer reject it instead of redirecting to a temp root.
+        Ok(_) => return false,
+        Err(err) if err.kind() == ErrorKind::NotFound => {}
+        // If we cannot even inspect the path, fail closed rather than treating
+        // an ambiguous filesystem error as sandbox isolation.
+        Err(_) => return false,
+    }
     match prepare_private_state_root(primary) {
         Ok(()) => false,
         Err(err) => matches!(
