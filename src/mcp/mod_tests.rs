@@ -111,8 +111,14 @@ fn default_screenshot_dir_populates_missing_output_path() {
         .get("output_path")
         .and_then(Value::as_str)
         .expect("output_path populated");
-    assert!(out.starts_with("/tmp/agy-screens/screenshot-"), "{out}");
-    assert!(out.ends_with(".png"), "{out}");
+    let out = PathBuf::from(out);
+    assert!(out.starts_with(&dir), "{}", out.display());
+    let file_name = out
+        .file_name()
+        .and_then(|name| name.to_str())
+        .expect("screenshot file name");
+    assert!(file_name.starts_with("screenshot-"), "{file_name}");
+    assert!(file_name.ends_with(".png"), "{file_name}");
 
     let mut compact_args = Map::new();
     compact::apply_default_screenshot_path(&leaf, &mut compact_args, None, true);
