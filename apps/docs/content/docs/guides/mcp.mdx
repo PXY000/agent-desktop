@@ -35,7 +35,31 @@ A tool's arguments are its command's arguments, with hyphens as underscores: `sn
 
 The tool list is read from the CLI's own command definitions, so it always matches the installed binary.
 
-## Apply global flags once
+### Compact tool surface (`--compact`)
+
+Clients that cap the total number of tools or prompt for permission per tool (such as Antigravity and Cursor) can pass `--compact` to expose four grouped tools instead of 75 leaf tools:
+
+```json
+{
+  "mcpServers": {
+    "agent-desktop": {
+      "command": "agent-desktop",
+      "args": ["mcp", "--compact", "--allow-headed"]
+    }
+  }
+}
+```
+
+| Tool | Purpose |
+|---|---|
+| `desktop_observe` | Read-only observation (`snapshot`, `find`, `get`, `is`, `screenshot`, `list-*`, `status`, `permissions`, `version`, `skills *`) |
+| `desktop_act` | Element, keyboard, mouse, clipboard, and notification actions (`click`, `type`, `press`, `drag`, `scroll`, ...) |
+| `desktop_window` | App and window lifecycle (`launch`, `close-app`, `focus-window`, `resize-window`, `move-window`, `wait`, `session *`) |
+| `desktop_batch` | Sequential multi-command batch execution |
+
+Pass `"command"` plus command arguments either as top-level properties or inside `"args"`.
+
+## Apply global flags once or opt into per-call flags
 
 Global flags given to `mcp` apply to every call:
 
@@ -43,9 +67,9 @@ Global flags given to `mcp` apply to every call:
 agent-desktop mcp --session s1 --headed
 ```
 
-`AGENT_DESKTOP_SESSION`, `AGENT_DESKTOP_AGENT_ID` and `AGENT_DESKTOP_HOME` in the server's environment apply the same way.
+`AGENT_DESKTOP_SESSION`, `AGENT_DESKTOP_AGENT_ID` and `AGENT_DESKTOP_HOME` in the server's environment apply the same way. When `AGENT_DESKTOP_HOME` is unset and `~/.agent-desktop` is blocked by a read-only OS sandbox, the state root automatically falls back to a private user-owned temporary directory.
 
-A tool cannot pass a global flag. Commands that need a session, such as `trace` and `cursor-overlay`, work only when the server has one, headed-only commands need `mcp --headed`, and `--wait-for` is not available per call.
+By default, a tool cannot pass a global flag. Pass `--allow-headed` when starting `agent-desktop mcp` to keep calls headless by default while allowing individual tool calls to pass `"headed": true` (and `"wait_for"`, `"wait_for_gone"`, `"wait_timeout"` on commands that support post-action waits). Pass `--screenshot-dir <DIR>` to save screenshots without `output_path` directly to disk instead of returning inline base64.
 
 ## Read results
 

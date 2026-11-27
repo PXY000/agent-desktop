@@ -154,3 +154,34 @@ fn malformed_messages_get_errors_and_the_server_keeps_serving() {
     );
     assert_eq!(responses[4]["result"]["isError"], false);
 }
+
+#[test]
+fn mcp_compact_and_allow_headed_flags_serve_grouped_tools_over_stdio() {
+    let responses = serve(
+        &[
+            json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {} }),
+            call(2, "desktop_observe", json!({ "command": "version" })),
+            call(
+                3,
+                "desktop_observe",
+                json!({ "command": "skills get", "args": { "name": "desktop" } }),
+            ),
+        ],
+        &["--compact", "--allow-headed"],
+    );
+    assert_eq!(responses.len(), 3, "{responses:?}");
+    let listed = responses[0]["result"]["tools"]
+        .as_array()
+        .expect("tools array");
+    assert_eq!(listed.len(), 4);
+    let version = &responses[1]["result"];
+    assert_eq!(version["isError"], false, "{version}");
+    assert_eq!(version["structuredContent"]["command"], "version");
+    let skill = &responses[2]["result"];
+    assert_eq!(skill["isError"], false, "{skill}");
+    assert!(
+        skill["structuredContent"]["data"]["content"]
+            .as_str()
+            .is_some_and(|text| !text.is_empty())
+    );
+}

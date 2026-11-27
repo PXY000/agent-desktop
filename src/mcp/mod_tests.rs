@@ -3,6 +3,18 @@ use super::*;
 fn server() -> Server {
     Server {
         tools: catalog::tools(),
+        compact: false,
+        screenshot_dir: None,
+        globals: Vec::new(),
+        calls: calls::Calls::default(),
+    }
+}
+
+fn compact_server() -> Server {
+    Server {
+        tools: catalog::tools_with_options(true),
+        compact: true,
+        screenshot_dir: Some(PathBuf::from("/tmp/agy-screens")),
         globals: Vec::new(),
         calls: calls::Calls::default(),
     }
@@ -51,6 +63,74 @@ fn modern_tools_list_is_cacheable_and_complete() {
     assert_eq!(
         result["tools"].as_array().unwrap().len(),
         catalog::tools().len()
+    );
+}
+
+#[test]
+fn compact_tools_list_exposes_four_grouped_tools_and_matching_instructions() {
+    let srv = compact_server();
+    let result = srv
+        .handle(&Value::Null, "tools/list", &json!({}))
+        .unwrap_or_else(|_| panic!("compact tools/list"));
+    let tools = result["tools"].as_array().unwrap();
+    assert_eq!(tools.len(), 4);
+    let names = tools
+        .iter()
+        .filter_map(|t| t["name"].as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        names,
+        [
+            "desktop_observe",
+            "desktop_act",
+            "desktop_window",
+            "desktop_batch"
+        ]
+    );
+    let mentioned = srv
+        .instructions()
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .filter(|word| word.starts_with("desktop_"))
+        .collect::<Vec<_>>();
+    assert!(!mentioned.is_empty());
+    for word in mentioned {
+        assert!(names.contains(&word), "compact instructions name {word}");
+    }
+}
+
+#[test]
+fn default_screenshot_dir_populates_missing_output_path() {
+    let leaf = catalog::tools()
+        .into_iter()
+        .find(|t| t.path == ["screenshot"])
+        .expect("screenshot tool");
+    let mut args = Map::new();
+    let dir = PathBuf::from("/tmp/agy-screens");
+    compact::apply_default_screenshot_path(&leaf, &mut args, Some(&dir), false);
+    let out = args
+        .get("output_path")
+        .and_then(Value::as_str)
+        .expect("output_path populated");
+    assert!(out.starts_with("/tmp/agy-screens/screenshot-"), "{out}");
+    assert!(out.ends_with(".png"), "{out}");
+
+    let mut compact_args = Map::new();
+    compact::apply_default_screenshot_path(&leaf, &mut compact_args, None, true);
+    let first = compact_args
+        .get("output_path")
+        .and_then(Value::as_str)
+        .expect("first output_path")
+        .to_string();
+    let mut second_args = Map::new();
+    compact::apply_default_screenshot_path(&leaf, &mut second_args, None, true);
+    let second = second_args
+        .get("output_path")
+        .and_then(Value::as_str)
+        .expect("second output_path")
+        .to_string();
+    assert_ne!(
+        first, second,
+        "back-to-back screenshots must get distinct paths"
     );
 }
 

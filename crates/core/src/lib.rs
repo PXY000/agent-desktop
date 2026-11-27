@@ -122,7 +122,7 @@ pub use storage::file_lock::FileLock;
 pub use storage::private_file_ops::{
     PrivateFileOps, bounded_read, install_private_file_ops, temporary_file_name,
 };
-pub use storage::state_root::validate_state_root_env;
+pub use storage::state_root::{fallback_temp_state_root, validate_state_root_env};
 pub use system::app_info::{AppInfo, AppPresentation, app_name_matches};
 pub use system::app_inventory::AppInventory;
 pub use system::app_inventory_query::AppInventoryQuery;
