@@ -95,21 +95,16 @@ fn is_sandbox_blocked(primary: &Path) -> bool {
     if !parent.exists() {
         return false;
     }
-    match std::fs::symlink_metadata(primary) {
-        Ok(meta) if !is_valid_existing_primary(&meta) => return false,
-        Ok(_) => {}
-        Err(err) if err.kind() == ErrorKind::NotFound => {}
-        Err(_) => return false,
+    if crate::storage::private_file_parent::ensure_private(primary).is_err() {
+        return match std::fs::symlink_metadata(primary) {
+            Ok(_) => false,
+            Err(err) if err.kind() == ErrorKind::NotFound => true,
+            Err(_) => false,
+        };
     }
     let probe = primary.join(LOCK_PROBE_NAME);
-    match std::fs::symlink_metadata(&probe) {
-        Ok(meta) if !is_valid_existing_lock(&meta) => return false,
-        Ok(_) => {}
-        Err(err) if err.kind() == ErrorKind::NotFound => {}
-        Err(_) => return false,
-    }
-    match prepare_private_state_root(primary) {
-        Ok(()) => false,
+    match crate::storage::private_file::open_private_lock(&probe, true) {
+        Ok(_) => false,
         Err(err) => {
             err.raw_os_error().is_some()
                 && matches!(
@@ -118,53 +113,6 @@ fn is_sandbox_blocked(primary: &Path) -> bool {
                 )
         }
     }
-}
-
-#[cfg(unix)]
-fn is_valid_existing_primary(meta: &std::fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    !meta.file_type().is_symlink()
-        && meta.is_dir()
-        && is_owned_by_current_user(meta)
-        && (meta.mode() & 0o077 == 0)
-}
-
-#[cfg(windows)]
-fn is_valid_existing_primary(meta: &std::fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
-    !meta.file_type().is_symlink()
-        && meta.is_dir()
-        && (meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0)
-}
-
-#[cfg(not(any(unix, windows)))]
-fn is_valid_existing_primary(meta: &std::fs::Metadata) -> bool {
-    !meta.file_type().is_symlink() && meta.is_dir()
-}
-
-#[cfg(unix)]
-fn is_valid_existing_lock(meta: &std::fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    !meta.file_type().is_symlink()
-        && meta.is_file()
-        && is_owned_by_current_user(meta)
-        && (meta.mode() & 0o077 == 0)
-        && meta.nlink() == 1
-}
-
-#[cfg(windows)]
-fn is_valid_existing_lock(meta: &std::fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
-    !meta.file_type().is_symlink()
-        && meta.is_file()
-        && (meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0)
-}
-
-#[cfg(not(any(unix, windows)))]
-fn is_valid_existing_lock(meta: &std::fs::Metadata) -> bool {
-    !meta.file_type().is_symlink() && meta.is_file()
 }
 
 fn prepare_private_state_root(root: &Path) -> std::io::Result<()> {
