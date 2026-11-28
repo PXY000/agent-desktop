@@ -14,7 +14,7 @@ const OBSERVE_TOOL: &str = "desktop_observe";
 const ACT_TOOL: &str = "desktop_act";
 const WINDOW_TOOL: &str = "desktop_window";
 const BATCH_TOOL: &str = "desktop_batch";
-const OBSERVE_BLOCKED_ARGS: &[&str] = &["output_path", "request", "headed"];
+const OBSERVE_BLOCKED_ARGS: &[&str] = &["output_path", "request", "guide", "headed"];
 
 const OBSERVE_COMMANDS: &[&str] = &[
     "snapshot",
@@ -253,6 +253,11 @@ fn enforce_observe_read_only(arguments: &Map<String, Value>) -> Result<(), Strin
         return Err(
             "desktop_observe is read-only and does not accept 'request: true' on permissions"
                 .into(),
+        );
+    }
+    if arguments.get("guide") == Some(&Value::Bool(true)) {
+        return Err(
+            "desktop_observe is read-only and does not accept 'guide: true' on permissions".into(),
         );
     }
     if arguments.get("headed").is_some_and(|v| !v.is_null()) {

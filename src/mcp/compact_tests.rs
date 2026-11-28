@@ -91,7 +91,7 @@ fn desktop_observe_strips_and_rejects_mutating_arguments() {
     let leaf = catalog::tools_with_options(true);
     let defs = definitions(&leaf);
     let observe_props = defs[0]["inputSchema"]["properties"].as_object().unwrap();
-    for forbidden in ["output_path", "request", "headed"] {
+    for forbidden in ["output_path", "request", "guide", "headed"] {
         assert!(
             !observe_props.contains_key(forbidden),
             "desktop_observe schema must not advertise '{forbidden}'"
@@ -120,6 +120,16 @@ fn desktop_observe_strips_and_rejects_mutating_arguments() {
         )
         .unwrap_err()
         .contains("read-only")
+    );
+
+    let guide_attempt = json!({
+        "command": "permissions",
+        "guide": true
+    });
+    assert!(
+        resolve_call("desktop_observe", guide_attempt.as_object().unwrap(), &leaf)
+            .unwrap_err()
+            .contains("read-only")
     );
 
     let headed_attempt = json!({
