@@ -106,7 +106,7 @@ fn default_screenshot_dir_populates_missing_output_path() {
         .expect("screenshot tool");
     let mut args = Map::new();
     let dir = PathBuf::from("/tmp/agy-screens");
-    compact::apply_default_screenshot_path(&leaf, &mut args, Some(&dir), false);
+    compact::apply_default_screenshot_path(&leaf, &mut args, Some(&dir));
     let out = args
         .get("output_path")
         .and_then(Value::as_str)
@@ -120,24 +120,33 @@ fn default_screenshot_dir_populates_missing_output_path() {
     assert!(file_name.starts_with("screenshot-"), "{file_name}");
     assert!(file_name.ends_with(".png"), "{file_name}");
 
-    let mut compact_args = Map::new();
-    compact::apply_default_screenshot_path(&leaf, &mut compact_args, None, true);
-    let first = compact_args
-        .get("output_path")
-        .and_then(Value::as_str)
-        .expect("first output_path")
-        .to_string();
     let mut second_args = Map::new();
-    compact::apply_default_screenshot_path(&leaf, &mut second_args, None, true);
+    compact::apply_default_screenshot_path(&leaf, &mut second_args, Some(&dir));
     let second = second_args
         .get("output_path")
         .and_then(Value::as_str)
-        .expect("second output_path")
-        .to_string();
+        .expect("second output_path");
     assert_ne!(
-        first, second,
+        out,
+        PathBuf::from(second),
         "back-to-back screenshots must get distinct paths"
     );
+
+    let mut unset_args = Map::new();
+    compact::apply_default_screenshot_path(&leaf, &mut unset_args, None);
+    assert!(unset_args.get("output_path").is_none());
+}
+
+#[test]
+fn compact_server_refuses_unlisted_direct_leaf_tools() {
+    let Err(error) = compact_server().handle(
+        &Value::Null,
+        "tools/call",
+        &json!({ "name": "desktop_sandbox_exec", "arguments": { "name": "s", "args": [] } }),
+    ) else {
+        panic!("compact mode must not dispatch unlisted leaf tools");
+    };
+    assert_eq!(error.code, -32602);
 }
 
 #[test]

@@ -23,12 +23,6 @@ pub fn validate_state_root_env() -> Result<(), AppError> {
     validate_state_root_env_value(override_active, env_value, is_owned_by_current_user)
 }
 
-/// Resolves the private temporary state root directory when `$HOME/.agent-desktop`
-/// is inaccessible (for example inside a read-only `$HOME` sandbox).
-pub fn fallback_temp_state_root() -> PathBuf {
-    default_temp_state_root()
-}
-
 pub(crate) fn validate_state_root_env_value(
     override_active: bool,
     env_value: Option<PathBuf>,
@@ -48,7 +42,7 @@ pub(crate) fn resolve_configured_state_root() -> Result<PathBuf, AppError> {
         override_active: crate::refs::home_override_active(),
         env_value: std::env::var_os(AGENT_DESKTOP_HOME_ENV).map(PathBuf::from),
         home_fallback: crate::refs::home_dir(),
-        temp_fallback: Some(default_temp_state_root()),
+        temp_fallback: default_temp_state_root(),
     };
     resolve_state_root_with_fallback(inputs, is_owned_by_current_user, is_sandbox_blocked)
 }
@@ -80,24 +74,18 @@ pub(crate) fn resolve_state_root_with_fallback(
         validate_env_root(&env_path, &owned_by_current_user)?;
         return Ok(env_path);
     }
-    if let Some(home) = inputs.home_fallback {
-        let primary = home.join(STATE_DIR_NAME);
-        if !inputs.override_active
-            && sandbox_blocked(&primary)
-            && let Some(fallback) = inputs.temp_fallback
-            && prepare_private_state_root(&fallback).is_ok()
-        {
-            return Ok(fallback);
-        }
-        return Ok(primary);
-    }
+    let home = inputs
+        .home_fallback
+        .ok_or_else(|| AppError::Internal("HOME directory not found".into()))?;
+    let primary = home.join(STATE_DIR_NAME);
     if !inputs.override_active
+        && sandbox_blocked(&primary)
         && let Some(fallback) = inputs.temp_fallback
         && prepare_private_state_root(&fallback).is_ok()
     {
         return Ok(fallback);
     }
-    Err(AppError::Internal("HOME directory not found".into()))
+    Ok(primary)
 }
 
 fn is_sandbox_blocked(primary: &Path) -> bool {
@@ -108,22 +96,75 @@ fn is_sandbox_blocked(primary: &Path) -> bool {
         return false;
     }
     match std::fs::symlink_metadata(primary) {
-        // An existing state root is never evidence of a read-only HOME. If it
-        // is a junction, symlink, file, or has unsafe permissions, let the
-        // private-file layer reject it instead of redirecting to a temp root.
-        Ok(_) => return false,
+        Ok(meta) if !is_valid_existing_primary(&meta) => return false,
+        Ok(_) => {}
         Err(err) if err.kind() == ErrorKind::NotFound => {}
-        // If we cannot even inspect the path, fail closed rather than treating
-        // an ambiguous filesystem error as sandbox isolation.
+        Err(_) => return false,
+    }
+    let probe = primary.join(LOCK_PROBE_NAME);
+    match std::fs::symlink_metadata(&probe) {
+        Ok(meta) if !is_valid_existing_lock(&meta) => return false,
+        Ok(_) => {}
+        Err(err) if err.kind() == ErrorKind::NotFound => {}
         Err(_) => return false,
     }
     match prepare_private_state_root(primary) {
         Ok(()) => false,
-        Err(err) => matches!(
-            err.kind(),
-            ErrorKind::PermissionDenied | ErrorKind::ReadOnlyFilesystem
-        ),
+        Err(err) => {
+            err.raw_os_error().is_some()
+                && matches!(
+                    err.kind(),
+                    ErrorKind::PermissionDenied | ErrorKind::ReadOnlyFilesystem
+                )
+        }
     }
+}
+
+#[cfg(unix)]
+fn is_valid_existing_primary(meta: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    !meta.file_type().is_symlink()
+        && meta.is_dir()
+        && is_owned_by_current_user(meta)
+        && (meta.mode() & 0o077 == 0)
+}
+
+#[cfg(windows)]
+fn is_valid_existing_primary(meta: &std::fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+    !meta.file_type().is_symlink()
+        && meta.is_dir()
+        && (meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn is_valid_existing_primary(meta: &std::fs::Metadata) -> bool {
+    !meta.file_type().is_symlink() && meta.is_dir()
+}
+
+#[cfg(unix)]
+fn is_valid_existing_lock(meta: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    !meta.file_type().is_symlink()
+        && meta.is_file()
+        && is_owned_by_current_user(meta)
+        && (meta.mode() & 0o077 == 0)
+        && meta.nlink() == 1
+}
+
+#[cfg(windows)]
+fn is_valid_existing_lock(meta: &std::fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+    !meta.file_type().is_symlink()
+        && meta.is_file()
+        && (meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn is_valid_existing_lock(meta: &std::fs::Metadata) -> bool {
+    !meta.file_type().is_symlink() && meta.is_file()
 }
 
 fn prepare_private_state_root(root: &Path) -> std::io::Result<()> {
@@ -134,26 +175,22 @@ fn prepare_private_state_root(root: &Path) -> std::io::Result<()> {
 }
 
 #[cfg(unix)]
-fn default_temp_state_root() -> PathBuf {
+fn default_temp_state_root() -> Option<PathBuf> {
     let uid = unsafe { libc::geteuid() };
-    std::env::temp_dir().join(format!("agent-desktop-{uid}"))
+    Some(PathBuf::from(format!("/tmp/agent-desktop-{uid}")))
 }
 
 #[cfg(not(unix))]
-fn default_temp_state_root() -> PathBuf {
-    let suffix = std::env::var("USERNAME")
-        .or_else(|_| std::env::var("USER"))
-        .ok()
-        .map(|raw| {
-            raw.chars()
-                .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
-                .collect::<String>()
-        })
-        .filter(|s| !s.is_empty());
-    match suffix {
-        Some(user) => std::env::temp_dir().join(format!("agent-desktop-{user}")),
-        None => std::env::temp_dir().join("agent-desktop"),
+fn default_temp_state_root() -> Option<PathBuf> {
+    let base = std::env::var_os("LOCALAPPDATA").map(PathBuf::from)?;
+    if !base.is_absolute() {
+        return None;
     }
+    let meta = std::fs::symlink_metadata(&base).ok()?;
+    if meta.file_type().is_symlink() || !meta.is_dir() {
+        return None;
+    }
+    Some(base.join("agent-desktop"))
 }
 
 fn validate_env_root(
@@ -226,6 +263,36 @@ pub(crate) fn is_owned_by_current_user(meta: &std::fs::Metadata) -> bool {
 #[cfg(not(unix))]
 pub(crate) fn is_owned_by_current_user(_meta: &std::fs::Metadata) -> bool {
     true
+}
+
+#[cfg(test)]
+pub(super) fn lock_read_only_private_dir_for_test(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if unsafe { libc::geteuid() } == 0 {
+            return false;
+        }
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o500)).is_ok()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        false
+    }
+}
+
+#[cfg(test)]
+pub(super) fn unlock_read_only_private_dir_for_test(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700));
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
 }
 
 #[cfg(test)]

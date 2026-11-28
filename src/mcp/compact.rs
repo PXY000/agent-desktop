@@ -285,20 +285,13 @@ pub(crate) fn apply_default_screenshot_path(
     tool: &Tool,
     arguments: &mut Map<String, Value>,
     screenshot_dir: Option<&PathBuf>,
-    compact: bool,
 ) {
+    let Some(dir) = screenshot_dir else {
+        return;
+    };
     if tool.path != ["screenshot"] || arguments.get("output_path").is_some_and(|v| !v.is_null()) {
         return;
     }
-    let fallback_dir;
-    let dir = match screenshot_dir {
-        Some(dir) => dir,
-        None if compact => {
-            fallback_dir = agent_desktop_core::fallback_temp_state_root().join("screenshots");
-            &fallback_dir
-        }
-        None => return,
-    };
     let millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis())

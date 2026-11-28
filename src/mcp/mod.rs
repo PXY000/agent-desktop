@@ -254,7 +254,7 @@ impl Server {
         let (tool, mut arguments) = if self.compact {
             match compact::resolve_call(name, &raw_arguments, &self.tools) {
                 Ok(Some(resolved)) => resolved,
-                Ok(None) => (self.find_direct_tool(name)?, raw_arguments),
+                Ok(None) => return Err(RpcError::new(-32602, format!("Unknown tool: {name}"))),
                 Err(message) => {
                     return Ok(
                         json!({ "content": [{ "type": "text", "text": message }], "isError": true }),
@@ -264,12 +264,7 @@ impl Server {
         } else {
             (self.find_direct_tool(name)?, raw_arguments)
         };
-        compact::apply_default_screenshot_path(
-            tool,
-            &mut arguments,
-            self.screenshot_dir.as_ref(),
-            self.compact,
-        );
+        compact::apply_default_screenshot_path(tool, &mut arguments, self.screenshot_dir.as_ref());
         Ok(call::call(tool, &arguments, &self.globals, &self.calls, id))
     }
 

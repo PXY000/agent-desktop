@@ -57,6 +57,24 @@ fn existing_unsafe_primary_is_not_treated_as_a_sandbox_blocked_home() {
 }
 
 #[test]
+fn existing_valid_private_primary_under_read_only_sandbox_still_falls_back() {
+    let home = TempDir::new();
+    let primary = home.path().join(STATE_DIR_NAME);
+    crate::storage::private_file_parent::ensure_private(&primary).expect("ensure private");
+    if !lock_read_only_private_dir_for_test(&primary) {
+        return;
+    }
+
+    let blocked = is_sandbox_blocked(&primary);
+    unlock_read_only_private_dir_for_test(&primary);
+
+    assert!(
+        blocked,
+        "an existing private directory whose lock file cannot be opened for writing must fall back"
+    );
+}
+
+#[test]
 fn explicit_env_never_falls_back_when_sandbox_blocked() {
     let dir = TempDir::new();
     let temp = TempDir::new();
