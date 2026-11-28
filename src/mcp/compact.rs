@@ -1,6 +1,7 @@
 //! Compact four-tool MCP surface grouping leaf commands into observe, act, window, and batch.
 
 use serde_json::{Map, Value, json};
+use std::hash::{BuildHasher, RandomState};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -13,6 +14,7 @@ const OBSERVE_TOOL: &str = "desktop_observe";
 const ACT_TOOL: &str = "desktop_act";
 const WINDOW_TOOL: &str = "desktop_window";
 const BATCH_TOOL: &str = "desktop_batch";
+const OBSERVE_BLOCKED_ARGS: &[&str] = &["output_path", "request", "headed"];
 
 const OBSERVE_COMMANDS: &[&str] = &[
     "snapshot",
@@ -130,6 +132,23 @@ fn group_definition(
     leaf_tools: &[Tool],
     read_only: bool,
 ) -> Value {
+    let mut cmd_properties = Map::new();
+    for cmd_label in commands {
+        if let Some(leaf) = find_leaf_tool(leaf_tools, cmd_label) {
+            let def = leaf.definition();
+            if let Some(leaf_props) = def["inputSchema"]["properties"].as_object() {
+                for (key, schema) in leaf_props {
+                    if key == "args" || (read_only && OBSERVE_BLOCKED_ARGS.contains(&key.as_str()))
+                    {
+                        continue;
+                    }
+                    cmd_properties
+                        .entry(key.clone())
+                        .or_insert_with(|| schema.clone());
+                }
+            }
+        }
+    }
     let mut properties = Map::new();
     let enum_values = commands
         .iter()
@@ -143,39 +162,29 @@ fn group_definition(
             "description": "The agent-desktop command to execute"
         }),
     );
-    properties.insert(
-        "args".into(),
+    let args_schema = if tool_name == WINDOW_TOOL {
+        json!({
+            "description": "Optional nested command arguments object, or command-line argument array for `launch`",
+            "oneOf": [
+                {
+                    "type": "object",
+                    "properties": cmd_properties,
+                    "additionalProperties": false
+                },
+                { "type": "array", "items": { "type": "string" } }
+            ]
+        })
+    } else {
         json!({
             "type": "object",
-            "description": "Optional nested command arguments object; arguments may also be passed as top-level properties"
-        }),
-    );
-    for cmd_label in commands {
-        if let Some(leaf) = find_leaf_tool(leaf_tools, cmd_label) {
-            let def = leaf.definition();
-            if let Some(leaf_props) = def["inputSchema"]["properties"].as_object() {
-                for (key, schema) in leaf_props {
-                    if key == "args" {
-                        continue;
-                    }
-                    properties
-                        .entry(key.clone())
-                        .or_insert_with(|| schema.clone());
-                }
-            }
-        }
-    }
-    if tool_name == WINDOW_TOOL {
-        properties.insert(
-            "args".into(),
-            json!({
-                "description": "Optional nested command arguments object, or command-line argument array for `launch`",
-                "oneOf": [
-                    { "type": "object" },
-                    { "type": "array", "items": { "type": "string" } }
-                ]
-            }),
-        );
+            "description": "Optional nested command arguments object; arguments may also be passed as top-level properties",
+            "properties": cmd_properties,
+            "additionalProperties": false
+        })
+    };
+    properties.insert("args".into(), args_schema);
+    for (key, schema) in cmd_properties {
+        properties.insert(key, schema);
     }
     json!({
         "name": tool_name,
@@ -227,7 +236,29 @@ pub(crate) fn resolve_call<'a>(
     let leaf = find_leaf_tool(leaf_tools, &canonical)
         .ok_or_else(|| format!("Command '{canonical}' is not available"))?;
     let merged = extract_leaf_arguments(arguments, &canonical)?;
+    if name == OBSERVE_TOOL {
+        enforce_observe_read_only(&merged)?;
+    }
     Ok(Some((leaf, merged)))
+}
+
+fn enforce_observe_read_only(arguments: &Map<String, Value>) -> Result<(), String> {
+    if arguments.get("output_path").is_some_and(|v| !v.is_null()) {
+        return Err(
+            "desktop_observe is read-only and does not accept 'output_path'; omit it to return an inline image (or write into the server's --screenshot-dir)"
+                .into(),
+        );
+    }
+    if arguments.get("request") == Some(&Value::Bool(true)) {
+        return Err(
+            "desktop_observe is read-only and does not accept 'request: true' on permissions"
+                .into(),
+        );
+    }
+    if arguments.get("headed").is_some_and(|v| !v.is_null()) {
+        return Err("desktop_observe is read-only and does not accept 'headed'".into());
+    }
+    Ok(())
 }
 
 fn normalize_command_label(raw: &str) -> String {
@@ -275,6 +306,11 @@ fn extract_leaf_arguments(
     }
     for (k, v) in arguments {
         if k != "command" && k != "args" {
+            if merged.contains_key(k) {
+                return Err(format!(
+                    "Argument '{k}' cannot be passed both at top level and inside 'args'"
+                ));
+            }
             merged.insert(k.clone(), v.clone());
         }
     }
@@ -292,15 +328,14 @@ pub(crate) fn apply_default_screenshot_path(
     if tool.path != ["screenshot"] || arguments.get("output_path").is_some_and(|v| !v.is_null()) {
         return;
     }
-    let millis = SystemTime::now()
+    let now = SystemTime::now();
+    let millis = now
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
     let seq = SCREENSHOT_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let path = dir.join(format!(
-        "screenshot-{millis}-{}-{seq}.png",
-        std::process::id()
-    ));
+    let nonce = RandomState::new().hash_one((std::process::id(), seq, now));
+    let path = dir.join(format!("screenshot-{millis}-{nonce:016x}.png"));
     arguments.insert(
         "output_path".into(),
         Value::from(path.to_string_lossy().into_owned()),

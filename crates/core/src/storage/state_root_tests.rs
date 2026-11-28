@@ -75,6 +75,30 @@ fn existing_valid_private_primary_under_read_only_sandbox_still_falls_back() {
 }
 
 #[test]
+fn user_symlink_in_home_ancestor_is_not_treated_as_sandbox_blocked() {
+    let outer = TempDir::new();
+    let real_home = outer.path().join("real-home");
+    fs::create_dir(&real_home).expect("create real home");
+    let linked_home = outer.path().join("linked-home");
+    if !create_user_symlink_for_test(&real_home, &linked_home) {
+        return;
+    }
+    let primary = linked_home.join("nested").join(STATE_DIR_NAME);
+    fs::create_dir(real_home.join("nested")).expect("create nested");
+
+    assert!(
+        !is_sandbox_blocked(&primary),
+        "a user-controlled symlink in a HOME ancestor must fail closed, never redirect"
+    );
+}
+
+#[test]
+fn world_writable_dir_is_rejected_as_runtime_fallback_base() {
+    let dir = TempDir::new();
+    assert!(is_world_writable_runtime_base_rejected_for_test(dir.path()));
+}
+
+#[test]
 fn explicit_env_never_falls_back_when_sandbox_blocked() {
     let dir = TempDir::new();
     let temp = TempDir::new();

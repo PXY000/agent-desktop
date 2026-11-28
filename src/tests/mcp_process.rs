@@ -185,3 +185,18 @@ fn mcp_compact_and_allow_headed_flags_serve_grouped_tools_over_stdio() {
             .is_some_and(|text| !text.is_empty())
     );
 }
+
+#[test]
+fn mcp_rejects_relative_screenshot_dir_at_startup() {
+    let output = binary()
+        .args(["mcp", "--screenshot-dir", "relative/untrusted"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("binary runs");
+    assert!(!output.status.success(), "{output:?}");
+    let envelope: Value = serde_json::from_slice(&output.stdout).expect("json error envelope");
+    assert_eq!(envelope["ok"], false, "{envelope}");
+    assert_eq!(envelope["error"]["code"], "INVALID_ARGS", "{envelope}");
+}

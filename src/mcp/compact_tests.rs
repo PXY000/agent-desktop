@@ -85,3 +85,66 @@ fn compact_resolve_rejects_command_in_wrong_group() {
     let err = resolve_call("desktop_observe", bad.as_object().unwrap(), &leaf).unwrap_err();
     assert!(err.contains("not valid for desktop_observe"), "{err}");
 }
+
+#[test]
+fn desktop_observe_strips_and_rejects_mutating_arguments() {
+    let leaf = catalog::tools_with_options(true);
+    let defs = definitions(&leaf);
+    let observe_props = defs[0]["inputSchema"]["properties"].as_object().unwrap();
+    for forbidden in ["output_path", "request", "headed"] {
+        assert!(
+            !observe_props.contains_key(forbidden),
+            "desktop_observe schema must not advertise '{forbidden}'"
+        );
+    }
+
+    let write_attempt = json!({
+        "command": "screenshot",
+        "output_path": "/tmp/overwrite-target.png"
+    });
+    assert!(
+        resolve_call("desktop_observe", write_attempt.as_object().unwrap(), &leaf)
+            .unwrap_err()
+            .contains("read-only")
+    );
+
+    let prompt_attempt = json!({
+        "command": "permissions",
+        "request": true
+    });
+    assert!(
+        resolve_call(
+            "desktop_observe",
+            prompt_attempt.as_object().unwrap(),
+            &leaf
+        )
+        .unwrap_err()
+        .contains("read-only")
+    );
+
+    let headed_attempt = json!({
+        "command": "snapshot",
+        "headed": true
+    });
+    assert!(
+        resolve_call(
+            "desktop_observe",
+            headed_attempt.as_object().unwrap(),
+            &leaf
+        )
+        .unwrap_err()
+        .contains("read-only")
+    );
+}
+
+#[test]
+fn compact_rejects_duplicate_top_level_and_nested_argument() {
+    let leaf = catalog::tools_with_options(false);
+    let dup = json!({
+        "command": "snapshot",
+        "app": "Finder",
+        "args": { "app": "Terminal" }
+    });
+    let err = resolve_call("desktop_observe", dup.as_object().unwrap(), &leaf).unwrap_err();
+    assert!(err.contains("both at top level and inside 'args'"), "{err}");
+}

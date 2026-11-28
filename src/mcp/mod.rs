@@ -66,9 +66,16 @@ pub(crate) fn command() -> Command {
 pub(crate) fn serve(matches: &ArgMatches) -> ExitCode {
     let allow_headed = matches.get_flag("allow_headed");
     let compact = matches.get_flag("compact");
-    let screenshot_dir = matches
+    let screenshot_dir = match matches
         .get_one::<String>("screenshot_dir")
-        .map(PathBuf::from);
+        .map(PathBuf::from)
+    {
+        Some(dir) => match agent_desktop_core::ensure_private_output_dir(&dir) {
+            Ok(()) => Some(dir),
+            Err(error) => return crate::finish("mcp", Err(error)),
+        },
+        None => None,
+    };
     let server = Arc::new(Server {
         tools: catalog::tools_with_options(allow_headed),
         compact,

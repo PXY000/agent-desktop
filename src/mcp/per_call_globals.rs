@@ -2,6 +2,44 @@
 
 use serde_json::{Map, Value, json};
 
+const HEADED_SUPPORTED_COMMANDS: &[&str] = &[
+    "click",
+    "double-click",
+    "triple-click",
+    "right-click",
+    "type",
+    "set-value",
+    "clear",
+    "focus",
+    "select",
+    "toggle",
+    "check",
+    "uncheck",
+    "expand",
+    "collapse",
+    "scroll",
+    "scroll-to",
+    "press",
+    "hover",
+    "drag",
+    "mouse-move",
+    "mouse-click",
+    "mouse-wheel",
+    "launch",
+    "close-app",
+    "focus-window",
+    "resize-window",
+    "move-window",
+    "minimize",
+    "maximize",
+    "restore",
+    "open-system-surface",
+    "dismiss-notification",
+    "dismiss-all-notifications",
+    "notification-action",
+    "batch",
+];
+
 const WAIT_SUPPORTED_COMMANDS: &[&str] = &[
     "snapshot",
     "click",
@@ -25,6 +63,13 @@ const WAIT_SUPPORTED_COMMANDS: &[&str] = &[
     "drag",
 ];
 
+pub(crate) fn supports_headed(path: &[String]) -> bool {
+    path.len() == 1
+        && HEADED_SUPPORTED_COMMANDS
+            .iter()
+            .any(|cmd| *cmd == path[0].as_str())
+}
+
 pub(crate) fn supports_wait(path: &[String]) -> bool {
     path.len() == 1
         && WAIT_SUPPORTED_COMMANDS
@@ -32,8 +77,10 @@ pub(crate) fn supports_wait(path: &[String]) -> bool {
             .any(|cmd| *cmd == path[0].as_str())
 }
 
-pub(crate) fn append_known_names(known: &mut Vec<String>, supports_wait: bool) {
-    known.push("headed".into());
+pub(crate) fn append_known_names(known: &mut Vec<String>, allow_headed: bool, supports_wait: bool) {
+    if allow_headed {
+        known.push("headed".into());
+    }
     if supports_wait {
         known.extend([
             "wait_for".into(),
@@ -43,14 +90,20 @@ pub(crate) fn append_known_names(known: &mut Vec<String>, supports_wait: bool) {
     }
 }
 
-pub(crate) fn insert_schema_properties(properties: &mut Map<String, Value>, supports_wait: bool) {
-    properties.insert(
-        "headed".into(),
-        json!({
-            "type": "boolean",
-            "description": "Prefer physical input delivery and allow focus/cursor changes for this call"
-        }),
-    );
+pub(crate) fn insert_schema_properties(
+    properties: &mut Map<String, Value>,
+    allow_headed: bool,
+    supports_wait: bool,
+) {
+    if allow_headed {
+        properties.insert(
+            "headed".into(),
+            json!({
+                "type": "boolean",
+                "description": "Prefer physical input delivery and allow focus/cursor changes for this call"
+            }),
+        );
+    }
     if supports_wait {
         properties.insert(
             "wait_for".into(),
@@ -79,9 +132,10 @@ pub(crate) fn insert_schema_properties(properties: &mut Map<String, Value>, supp
 pub(crate) fn extract_argv(
     argv: &mut Vec<String>,
     arguments: &mut Map<String, Value>,
+    allow_headed: bool,
     supports_wait: bool,
 ) -> Result<(), String> {
-    if let Some(val) = arguments.remove("headed") {
+    if allow_headed && let Some(val) = arguments.remove("headed") {
         match val {
             Value::Null | Value::Bool(false) => {}
             Value::Bool(true) => argv.push("--headed".into()),

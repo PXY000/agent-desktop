@@ -37,12 +37,49 @@ pub(crate) fn validate_state_root_env_value(
     }
 }
 
+/// Validates and prepares an operator-configured private output directory
+/// (such as `mcp --screenshot-dir`), creating it with private permissions when
+/// missing and rejecting relative paths, parent traversal, symlinks, foreign
+/// owners, or group/world-accessible directories.
+pub fn ensure_private_output_dir(path: &Path) -> Result<(), AppError> {
+    if path.as_os_str().is_empty() || !path.is_absolute() {
+        return Err(AppError::invalid_input_with_suggestion(
+            format!(
+                "Output directory must be an absolute path, got '{}'",
+                path.display()
+            ),
+            "Pass an absolute directory path that you own.",
+        ));
+    }
+    if path
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return Err(AppError::invalid_input_with_suggestion(
+            format!(
+                "Output directory must not contain '..': '{}'",
+                path.display()
+            ),
+            "Pass a canonical absolute directory path without '..' segments.",
+        ));
+    }
+    crate::storage::private_file_parent::ensure_private(path).map_err(|err| {
+        AppError::invalid_input_with_suggestion(
+            format!(
+                "Output directory '{}' is not a private user-owned directory: {err}",
+                path.display()
+            ),
+            "Choose a private (0700) directory you own, not a shared or symlinked path.",
+        )
+    })
+}
+
 pub(crate) fn resolve_configured_state_root() -> Result<PathBuf, AppError> {
     let inputs = StateRootInputs {
         override_active: crate::refs::home_override_active(),
         env_value: std::env::var_os(AGENT_DESKTOP_HOME_ENV).map(PathBuf::from),
         home_fallback: crate::refs::home_dir(),
-        temp_fallback: default_temp_state_root(),
+        temp_fallback: default_private_runtime_root(),
     };
     resolve_state_root_with_fallback(inputs, is_owned_by_current_user, is_sandbox_blocked)
 }
@@ -92,27 +129,38 @@ fn is_sandbox_blocked(primary: &Path) -> bool {
     let Some(parent) = primary.parent() else {
         return false;
     };
-    if !parent.exists() {
+    let Ok(parent_meta) = std::fs::symlink_metadata(parent) else {
+        return false;
+    };
+    if parent_meta.file_type().is_symlink() || !parent_meta.is_dir() {
         return false;
     }
-    if crate::storage::private_file_parent::ensure_private(primary).is_err() {
-        return match std::fs::symlink_metadata(primary) {
-            Ok(_) => false,
-            Err(err) if err.kind() == ErrorKind::NotFound => true,
-            Err(_) => false,
-        };
+    if let Err(err) = crate::storage::private_file_parent::ensure_private(primary) {
+        return is_os_sandbox_denial(&err)
+            && matches!(
+                std::fs::symlink_metadata(primary),
+                Err(meta_err) if meta_err.kind() == ErrorKind::NotFound
+            );
     }
     let probe = primary.join(LOCK_PROBE_NAME);
+    match std::fs::symlink_metadata(&probe) {
+        Ok(meta) if meta.file_type().is_symlink() || !meta.is_file() => return false,
+        Ok(_) => {}
+        Err(err) if err.kind() == ErrorKind::NotFound => {}
+        Err(_) => return false,
+    }
     match crate::storage::private_file::open_private_lock(&probe, true) {
         Ok(_) => false,
-        Err(err) => {
-            err.raw_os_error().is_some()
-                && matches!(
-                    err.kind(),
-                    ErrorKind::PermissionDenied | ErrorKind::ReadOnlyFilesystem
-                )
-        }
+        Err(err) => is_os_sandbox_denial(&err),
     }
+}
+
+fn is_os_sandbox_denial(err: &std::io::Error) -> bool {
+    err.raw_os_error().is_some()
+        && matches!(
+            err.kind(),
+            ErrorKind::PermissionDenied | ErrorKind::ReadOnlyFilesystem
+        )
 }
 
 fn prepare_private_state_root(root: &Path) -> std::io::Result<()> {
@@ -123,15 +171,46 @@ fn prepare_private_state_root(root: &Path) -> std::io::Result<()> {
 }
 
 #[cfg(unix)]
-fn default_temp_state_root() -> Option<PathBuf> {
-    let uid = unsafe { libc::geteuid() };
-    Some(PathBuf::from(format!("/tmp/agent-desktop-{uid}")))
+fn default_private_runtime_root() -> Option<PathBuf> {
+    for var in ["XDG_RUNTIME_DIR", "TMPDIR"] {
+        let Some(raw) = std::env::var_os(var) else {
+            continue;
+        };
+        let base = PathBuf::from(raw);
+        if is_private_runtime_base(&base) {
+            return Some(base.join("agent-desktop"));
+        }
+    }
+    None
+}
+
+#[cfg(unix)]
+pub(super) fn is_private_runtime_base(base: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    if !base.is_absolute()
+        || base
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return false;
+    }
+    let Ok(meta) = std::fs::symlink_metadata(base) else {
+        return false;
+    };
+    if meta.file_type().is_symlink() || !meta.is_dir() {
+        return false;
+    }
+    meta.uid() == unsafe { libc::geteuid() } && (meta.mode() & 0o077 == 0)
 }
 
 #[cfg(not(unix))]
-fn default_temp_state_root() -> Option<PathBuf> {
+fn default_private_runtime_root() -> Option<PathBuf> {
     let base = std::env::var_os("LOCALAPPDATA").map(PathBuf::from)?;
-    if !base.is_absolute() {
+    if !base.is_absolute()
+        || base
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
         return None;
     }
     let meta = std::fs::symlink_metadata(&base).ok()?;
@@ -240,6 +319,39 @@ pub(super) fn unlock_read_only_private_dir_for_test(path: &Path) {
     #[cfg(not(unix))]
     {
         let _ = path;
+    }
+}
+
+#[cfg(test)]
+pub(super) fn create_user_symlink_for_test(target: &Path, link: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        if unsafe { libc::geteuid() } == 0 {
+            return false;
+        }
+        std::os::unix::fs::symlink(target, link).is_ok()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (target, link);
+        false
+    }
+}
+
+#[cfg(test)]
+pub(super) fn is_world_writable_runtime_base_rejected_for_test(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o777)).is_err() {
+            return false;
+        }
+        !is_private_runtime_base(path)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        true
     }
 }
 

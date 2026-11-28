@@ -44,7 +44,7 @@ Clients that cap the total number of tools or prompt for permission per tool (su
   "mcpServers": {
     "agent-desktop": {
       "command": "agent-desktop",
-      "args": ["mcp", "--compact", "--allow-headed"]
+      "args": ["mcp", "--compact"]
     }
   }
 }
@@ -67,9 +67,9 @@ Global flags given to `mcp` apply to every call:
 agent-desktop mcp --session s1 --headed
 ```
 
-`AGENT_DESKTOP_SESSION`, `AGENT_DESKTOP_AGENT_ID` and `AGENT_DESKTOP_HOME` in the server's environment apply the same way. When `AGENT_DESKTOP_HOME` is unset and `~/.agent-desktop` is blocked by a read-only OS sandbox, the state root automatically falls back to a private user-owned temporary directory.
+`AGENT_DESKTOP_SESSION`, `AGENT_DESKTOP_AGENT_ID` and `AGENT_DESKTOP_HOME` in the server's environment apply the same way. When `AGENT_DESKTOP_HOME` is unset and `~/.agent-desktop` is blocked by a read-only OS sandbox, the state root automatically falls back to a private `0700` user-owned runtime directory (`XDG_RUNTIME_DIR` or `TMPDIR` on Unix, `LOCALAPPDATA` on Windows) without using shared world-writable `/tmp`.
 
-By default, a tool cannot pass a global flag. Pass `--allow-headed` when starting `agent-desktop mcp` to keep calls headless by default while allowing individual tool calls to pass `"headed": true` (and `"wait_for"`, `"wait_for_gone"`, `"wait_timeout"` on commands that support post-action waits). Pass `--screenshot-dir <DIR>` to save screenshots without `output_path` directly to disk instead of returning inline base64.
+By default, a tool cannot pass a global flag. Pass `--allow-headed` when starting `agent-desktop mcp` to keep calls headless by default while allowing action calls to pass `"headed": true` (and `"wait_for"`, `"wait_for_gone"`, `"wait_timeout"` on commands that support post-action waits). Pass `--screenshot-dir <DIR>` with a private `0700` user-owned directory to save screenshots that omit `output_path` to disk instead of returning inline base64.
 
 ## Read results
 
@@ -85,7 +85,7 @@ Call `desktop_skills_get` with `{ "name": "desktop" }` for the observe-act loop 
 
 ## Security
 
-The server adds nothing the CLI cannot already do. Tool arguments become CLI arguments without a shell. A value is always passed as a value, never as a flag. A tool cannot set global flags such as `--session` or `--headed`; only the server's own command line can.
+The server adds nothing the CLI cannot already do. Tool arguments become CLI arguments without a shell. A value is always passed as a value, never as a flag. Session, identity, and trace global flags (`--session`, `--agent-id`, `--trace`) can only be set on the server's own command line; per-call `--headed` (on mutating actions) and post-action `--wait-for` flags are rejected unless the server was explicitly started with `--allow-headed`. In `--compact` mode, `desktop_observe` (`readOnlyHint: true`) strips and rejects mutating options (`output_path`, `request`, `headed`), and `--screenshot-dir` requires an absolute private (`0700`) user-owned directory.
 
 A tool still has the CLI's full reach: it can operate any app the accessibility tree exposes, and `desktop_launch` starts any program on `PATH` with any arguments. Treat the server like a shell for the signed-in user. Keep your client's confirmation on for actions, and remember that text read from the screen is untrusted input to the model.
 

@@ -106,6 +106,7 @@ impl Tool {
         if self.allow_headed && self.output == Output::Envelope {
             per_call_globals::insert_schema_properties(
                 &mut properties,
+                per_call_globals::supports_headed(&self.path),
                 per_call_globals::supports_wait(&self.path),
             );
         }
@@ -125,6 +126,7 @@ impl Tool {
             per_call_globals::extract_argv(
                 &mut argv,
                 &mut command_args,
+                per_call_globals::supports_headed(&self.path),
                 per_call_globals::supports_wait(&self.path),
             )?;
         }
@@ -187,6 +189,7 @@ impl Tool {
         if self.allow_headed && self.output == Output::Envelope {
             per_call_globals::append_known_names(
                 &mut known,
+                per_call_globals::supports_headed(&self.path),
                 per_call_globals::supports_wait(&self.path),
             );
         }
